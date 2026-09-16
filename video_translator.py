@@ -1,27 +1,47 @@
 import whisper
 import os
 import pysrt
+import torch
+import time
 from googletrans import Translator
 import subprocess
 from pathlib import Path
-import sys
+from subtitle_adder import SubtitleAdder
+
+# 焼き込み字幕のスタイル（force_style）。ffmpegの subtitles フィルタにそのまま渡す
+SUBTITLE_FORCE_STYLE = "Fontsize=24,PrimaryColour=&Hffffff&,BackColour=&H80000000&,Bold=1"
 
 class VideoTranslator:
     def __init__(self):
         print("初期化中...")
-        
+
         # FFmpegの確認
         self.setup_ffmpeg()
-        
+
+        # GPU(CUDA)の確認。本ツールはGPU前提で動作するため、無い場合はここで明示的に停止する
+        self.check_gpu()
+
         # Whisperモデル読み込み
         print("Whisperモデルを読み込み中...")
         self.model = whisper.load_model("medium", device="cuda")  # GPU使用を明示
-        
-        # 翻訳器初期化
-        self.translator = Translator()
-        
+
+        # 翻訳器初期化（複数のサービスURLを与え、片方がブロック/不調でも他方にフォールバックしやすくする）
+        self.translator = Translator(service_urls=['translate.googleapis.com', 'translate.google.com'])
+
+        # 字幕焼き込み（複数の方式を順に試すフォールバック処理はSubtitleAdderに委譲）
+        self.subtitle_adder = SubtitleAdder()
+
         print("準備完了！")
-    
+
+    def check_gpu(self):
+        """CUDA対応GPUが利用可能か確認する。本ツールはGPU必須（CPUフォールバックなし）"""
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "CUDA対応のNVIDIA GPUが検出されませんでした。本ツールはGPU必須です（CPUでは動作しません）。\n"
+                "NVIDIAドライバと、CUDA対応版のPyTorchがインストールされているか確認してください。"
+            )
+        print(f"GPU検出: {torch.cuda.get_device_name(0)}")
+
     def setup_ffmpeg(self):
         """FFmpeg設定"""
         # ローカルFFmpegを優先使用
@@ -70,13 +90,15 @@ class VideoTranslator:
             print("\n?? 翻訳・字幕作成中...")
             self.create_japanese_subtitles(result, srt_path)
             
-            # Step 3: 動画に字幕追加
+            # Step 3: 動画に字幕追加（焼き込み。失敗時は複数の方式に自動フォールバック）
             print("\n?? 字幕を動画に追加中...")
-            success = self.add_subtitles_to_video(video_path, srt_path, output_video)
-            
-            if success:
-                print(f"\n? 完成: {output_video}")
-                return str(output_video)
+            result_path = self.subtitle_adder.add_subtitles_to_video(
+                video_path, srt_path, output_video, force_style=SUBTITLE_FORCE_STYLE
+            )
+
+            if result_path:
+                print(f"\n? 完成: {result_path}")
+                return str(result_path)
             else:
                 print(f"\n??  字幕ファイルのみ作成: {srt_path}")
                 return str(srt_path)
@@ -85,73 +107,43 @@ class VideoTranslator:
             print(f"? エラー: {e}")
             raise
     
+    def translate_text(self, text, retries=3, retry_delay=1.5):
+        """英語テキストを日本語に翻訳する。googletransは断続的に失敗することがあるため数回リトライする。
+        全て失敗した場合はNoneを返す（呼び出し側で原文へのフォールバックを行う）"""
+        for attempt in range(1, retries + 1):
+            try:
+                return self.translator.translate(text, src='en', dest='ja').text
+            except Exception as e:
+                if attempt < retries:
+                    time.sleep(retry_delay)
+                else:
+                    print(f"   翻訳エラー（{retries}回リトライ後も失敗）: {e}")
+        return None
+
     def create_japanese_subtitles(self, transcription_result, srt_path):
         """字幕作成"""
         subs = pysrt.SubRipFile()
         total_segments = len(transcription_result["segments"])
-        
+
         for i, segment in enumerate(transcription_result["segments"], 1):
-            try:
-                # 翻訳実行
-                translated = self.translator.translate(
-                    segment["text"],
-                    src='en',
-                    dest='ja'
-                )
-                japanese_text = translated.text
-                
-                # 字幕エントリ作成
-                sub = pysrt.SubRipItem()
-                sub.index = i
-                sub.start = pysrt.SubRipTime(seconds=segment["start"])
-                sub.end = pysrt.SubRipTime(seconds=segment["end"])
-                sub.text = japanese_text
-                
-                subs.append(sub)
-                
-                # 進捗表示
-                if i % 5 == 0 or i == total_segments:
-                    print(f"   進捗: {i}/{total_segments} ({i/total_segments*100:.1f}%)")
-                    
-            except Exception as e:
-                print(f"   翻訳エラー (セグメント {i}): {e}")
-                # エラー時は英語のまま
-                sub = pysrt.SubRipItem()
-                sub.index = i
-                sub.start = pysrt.SubRipTime(seconds=segment["start"])
-                sub.end = pysrt.SubRipTime(seconds=segment["end"])
-                sub.text = segment["text"]
-                subs.append(sub)
-        
+            japanese_text = self.translate_text(segment["text"])
+
+            # 字幕エントリ作成（翻訳に失敗した場合は原文のまま）
+            sub = pysrt.SubRipItem()
+            sub.index = i
+            sub.start = pysrt.SubRipTime(seconds=segment["start"])
+            sub.end = pysrt.SubRipTime(seconds=segment["end"])
+            sub.text = japanese_text if japanese_text is not None else segment["text"]
+
+            subs.append(sub)
+
+            # 進捗表示
+            if i % 5 == 0 or i == total_segments:
+                print(f"   進捗: {i}/{total_segments} ({i/total_segments*100:.1f}%)")
+
         # 字幕ファイル保存
         subs.save(str(srt_path), encoding='utf-8')
         print(f"? 字幕ファイル保存完了: {srt_path}")
-    
-    def add_subtitles_to_video(self, video_path, srt_path, output_path):
-        """字幕を動画に焼き込み"""
-        
-        cmd = [
-            'ffmpeg',
-            '-i', str(video_path),
-            '-vf', f"subtitles='{str(srt_path)}':force_style='Fontsize=24,PrimaryColour=&Hffffff&,BackColour=&H80000000&,Bold=1'",
-            '-c:a', 'copy',
-            '-c:v', 'libx264',
-            '-y',
-            str(output_path)
-        ]
-        
-        try:
-            result = subprocess.run(cmd, 
-                                  capture_output=True, 
-                                  text=True, 
-                                  check=True)
-            return True
-        except subprocess.CalledProcessError as e:
-            print(f"   FFmpegエラー: {e}")
-            return False
-        except FileNotFoundError:
-            print("   FFmpegが見つかりません")
-            return False
 
 def main():
     print("動画翻訳ツール")

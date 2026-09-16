@@ -7,50 +7,60 @@ import pysrt
 class SubtitleAdder:
     def __init__(self):
         pass
-    
-    def add_subtitles_to_video(self, video_path, srt_path, output_path):
-        """動画に字幕を追加（複数の方法を試行）"""
-        
+
+    @staticmethod
+    def escape_ffmpeg_filter_path(path):
+        """Windowsパス（ドライブレターの':'やバックスラッシュ）をffmpegのフィルタ引数として安全な形式に変換"""
+        return str(path).replace('\\', '/').replace(':', '\\:')
+
+    def add_subtitles_to_video(self, video_path, srt_path, output_path, force_style=None):
+        """動画に字幕を追加（複数の方法を順に試行し、実際に書き出されたファイルのPathを返す。全て失敗した場合はNone）"""
+
         video_path = Path(video_path)
         srt_path = Path(srt_path)
         output_path = Path(output_path)
-        
+
         if not video_path.exists():
             raise FileNotFoundError(f"動画ファイルが見つかりません: {video_path}")
         if not srt_path.exists():
             raise FileNotFoundError(f"字幕ファイルが見つかりません: {srt_path}")
-        
+
         print(f"動画: {video_path}")
         print(f"字幕: {srt_path}")
         print(f"出力: {output_path}")
-        
-        # 方法1: 基本的なsubtitlesフィルター
-        if self.try_basic_subtitles(video_path, srt_path, output_path):
-            return True
-        
-        # 方法2: ASSファイル使用
+
+        # 方法1: 基本的なsubtitlesフィルター（焼き込み）
+        if self.try_basic_subtitles(video_path, srt_path, output_path, force_style):
+            return output_path
+
+        # 方法2: ASSファイル使用（焼き込み）
         if self.try_ass_subtitles(video_path, srt_path, output_path):
-            return True
-        
-        # 方法3: 外部字幕として埋め込み
+            return output_path
+
+        # 方法3: 外部字幕として埋め込み（焼き込みではなくソフトサブとしてMKVに格納）
         if self.try_external_subtitles(video_path, srt_path, output_path):
-            return True
-        
-        return False
-    
-    def try_basic_subtitles(self, video_path, srt_path, output_path):
+            return output_path.with_suffix('.mkv')
+
+        return None
+
+    def try_basic_subtitles(self, video_path, srt_path, output_path, force_style=None):
         """基本的なsubtitlesフィルター"""
         print("\n方法1: 基本的なsubtitlesフィルター")
-        
+
+        vf = f'subtitles={self.escape_ffmpeg_filter_path(srt_path)}'
+        if force_style:
+            vf += f":force_style='{force_style}'"
+
         cmd = [
             'ffmpeg',
             '-i', str(video_path),
-            '-vf', f'subtitles={str(srt_path)}',
+            '-vf', vf,
             '-c:a', 'copy',
+            '-c:v', 'libx264',
             '-y',
             str(output_path)
         ]
-        
+
         return self.run_ffmpeg_command(cmd)
     
     def try_ass_subtitles(self, video_path, srt_path, output_path):
@@ -64,18 +74,18 @@ class SubtitleAdder:
         cmd = [
             'ffmpeg',
             '-i', str(video_path),
-            '-vf', f'ass={str(ass_path)}',
+            '-vf', f'ass={self.escape_ffmpeg_filter_path(ass_path)}',
             '-c:a', 'copy',
             '-y',
             str(output_path)
         ]
-        
+
         result = self.run_ffmpeg_command(cmd)
-        
+
         # 一時ASSファイル削除
         if ass_path.exists():
             ass_path.unlink()
-        
+
         return result
     
     def try_external_subtitles(self, video_path, srt_path, output_path):
@@ -154,10 +164,10 @@ def main():
     output_file = sys.argv[3]
     
     adder = SubtitleAdder()
-    success = adder.add_subtitles_to_video(video_file, srt_file, output_file)
-    
-    if success:
-        print(f"\n🎉 完了: {output_file}")
+    result_path = adder.add_subtitles_to_video(video_file, srt_file, output_file)
+
+    if result_path:
+        print(f"\n🎉 完了: {result_path}")
     else:
         print("\n❌ 全ての方法が失敗しました")
 
