@@ -3,7 +3,7 @@ import os
 import pysrt
 import torch
 import time
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 import subprocess
 from pathlib import Path
 from subtitle_adder import SubtitleAdder
@@ -25,8 +25,8 @@ class VideoTranslator:
         print("Whisperモデルを読み込み中...")
         self.model = whisper.load_model("medium", device="cuda")  # GPU使用を明示
 
-        # 翻訳器初期化（複数のサービスURLを与え、片方がブロック/不調でも他方にフォールバックしやすくする）
-        self.translator = Translator(service_urls=['translate.googleapis.com', 'translate.google.com'])
+        # 翻訳器初期化
+        self.translator = GoogleTranslator(source='en', target='ja')
 
         # 字幕焼き込み（複数の方式を順に試すフォールバック処理はSubtitleAdderに委譲）
         self.subtitle_adder = SubtitleAdder()
@@ -107,15 +107,15 @@ class VideoTranslator:
             print(f"? エラー: {e}")
             raise
     
-    def translate_text(self, text, retries=3, retry_delay=1.5):
-        """英語テキストを日本語に翻訳する。googletransは断続的に失敗することがあるため数回リトライする。
-        全て失敗した場合はNoneを返す（呼び出し側で原文へのフォールバックを行う）"""
+    def translate_text(self, text, retries=3, retry_delay=2.0):
+        """英語テキストを日本語に翻訳する。レート制限等で断続的に失敗することがあるため、
+        待機時間を伸ばしながら数回リトライする。全て失敗した場合はNoneを返す（呼び出し側で原文へのフォールバックを行う）"""
         for attempt in range(1, retries + 1):
             try:
-                return self.translator.translate(text, src='en', dest='ja').text
+                return self.translator.translate(text)
             except Exception as e:
                 if attempt < retries:
-                    time.sleep(retry_delay)
+                    time.sleep(retry_delay * attempt)
                 else:
                     print(f"   翻訳エラー（{retries}回リトライ後も失敗）: {e}")
         return None
