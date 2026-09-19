@@ -6,7 +6,7 @@
 
 - **NVIDIA GPU（CUDA対応）が必須です。** 音声認識にWhisperの`medium`モデルをGPU（`device="cuda"`）で実行するため、CUDA対応GPUがない環境では動作しません（CPUフォールバックはありません）。GPUが検出できない場合は起動時にエラーで停止します。
 - Windows（`run_translator.bat` / `setup_ffmpeg.py` はWindows向け）
-- Python
+- **Python 3.10〜3.11。** `requirements.txt` は `torch==2.5.1+cu118` などCUDA(11.8)版PyTorchを固定しています。Python 3.12以降では他の固定パッケージ（`numba`など）が対応していない場合があるため、3.10または3.11を推奨します。
 - FFmpeg（`setup_ffmpeg.py` で自動セットアップ可能）
 
 ## セットアップ
@@ -14,6 +14,8 @@
 ```
 pip install -r requirements.txt
 ```
+
+`torch==2.5.1+cu118` のようなCUDA版PyTorchはPyPI本体には無く、PyTorch専用のパッケージインデックスからのみ取得できます。そのため `requirements.txt` の先頭に `--extra-index-url https://download.pytorch.org/whl/cu118` を入れてあります（このURLを指定せずに `pip install torch==2.5.1+cu118` 単体を実行すると `Could not find a version that satisfies the requirement torch==2.5.1+cu118` のようなエラーになります）。
 
 ## 実行
 
