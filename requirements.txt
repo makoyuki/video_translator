@@ -1,9 +1,5 @@
 --extra-index-url https://download.pytorch.org/whl/cu118
 
-# googletransはメンテナンスが止まっており既知のバグ(#350)で翻訳失敗時にAttributeErrorを出すため、
-# 後継のdeep-translatorに置き換え。将来の互換性確認のためバージョンは意図的に未固定。
-deep-translator
-
 certifi==2026.1.4
 chardet==3.0.4
 charset-normalizer==3.4.4
