@@ -10,8 +10,14 @@ class SubtitleAdder:
 
     @staticmethod
     def escape_ffmpeg_filter_path(path):
-        """Windowsパス（ドライブレターの':'やバックスラッシュ）をffmpegのフィルタ引数として安全な形式に変換"""
-        return str(path).replace('\\', '/').replace(':', '\\:')
+        """subtitles/assフィルタの引数として安全に渡せるようパスを変換する"""
+        # このフィルタは独自の':'区切りパーサーを持ち、汎用のシングルクォートや
+        # "\:" (バックスラッシュ1つ)によるエスケープが効かず、ドライブレターの
+        # ':'でパスが分割されて2番目の引数(original_size)に誤って割り当てられる
+        # 不具合を実機のffmpegで確認した。"\\:" (バックスラッシュ2つ)でのみ
+        # 正しく1文字のコロンとして扱われることを検証済み。
+        normalized = str(path).replace('\\', '/')
+        return normalized.replace(':', '\\\\:')
 
     def add_subtitles_to_video(self, video_path, srt_path, output_path, force_style=None):
         """動画に字幕を追加（複数の方法を順に試行し、実際に書き出されたファイルのPathを返す。全て失敗した場合はNone）"""

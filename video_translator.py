@@ -112,12 +112,20 @@ class VideoTranslator:
         待機時間を伸ばしながら数回リトライする。全て失敗した場合はNoneを返す（呼び出し側で原文へのフォールバックを行う）"""
         for attempt in range(1, retries + 1):
             try:
-                return self.translator.translate(text)
+                result = self.translator.translate(text)
+                # deep-translatorはGoogle側がブロック等で翻訳できなかった場合、例外を出さず
+                # 原文をそのまま返すことがある。原文と一致する場合は翻訳失敗とみなしリトライする
+                if not result or result.strip() == text.strip():
+                    raise ValueError("翻訳結果が原文と同一（翻訳できていない可能性）")
+                return result
             except Exception as e:
                 if attempt < retries:
                     time.sleep(retry_delay * attempt)
                 else:
                     print(f"   翻訳エラー（{retries}回リトライ後も失敗）: {e}")
+            finally:
+                # 連続リクエストによるブロックを避けるための待機
+                time.sleep(0.3)
         return None
 
     def create_japanese_subtitles(self, transcription_result, srt_path):
